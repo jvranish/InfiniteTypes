@@ -1,7 +1,8 @@
 {-# LANGUAGE RecursiveDo
+           , DeriveFunctor
+           , DeriveFoldable
+           , DeriveTraversable
            #-}
-import Data.Tree
-import Data.Graph
 import Infer
 
 import Data.Foldable
@@ -12,34 +13,35 @@ import Data.Monoid
 import Control.Applicative
 import Control.Monad.Trans
 
-squishGraph g = drawForest $ fmap (fmap show) $ dff g'
+
+type TypeRef s = ContextRef s
+
+
+data Type a = Var
+            | Func a a
+  deriving (Eq, Ord, Show, Functor, Foldable, Traversable)
+
+data Expr a = Apply a a
+            | Id String
+            | Lambda String a
+  deriving (Eq, Ord, Show, Functor, Foldable, Traversable)
+  
+unify :: TypeRef s -> TypeRef s -> ContextT s m a (TypeRef s)
+unify aRef bRef = do
+    sameRef <- refEq aRef bRef
+    case sameRef of
+      True -> return a
+      False -> mdo
+          a <- readRef aRef
+          b <- readRef bRef
+          subsRefs [a, b] n  -- the awesome happens here
+          n <- unify' a b  
+          return n
   where
-    (g', vn, kv) = graphFromEdges g
+    unify' Var _ = bRef
+    unify' _ Var = aRef
+    unify' (Func a b) (Func c d) = newType =<< return Func `ap` unify a c `ap` unify b d
+    
 
-
-data Test a = Two Int a a
-            | Zero Int
-  deriving (Eq, Ord, Show)
   
-instance Functor Test where
-  fmap f (Two n a b) = Two n (f a) (f b)
-  fmap _ (Zero n) = Zero n
-  
-instance Foldable Test where
-  foldMap f (Two _ a b) = f a `mappend` f b
-  foldMap _ (Zero _) = mempty
-  
-instance Traversable Test where
-  traverse f (Two n a b) = Two n <$> f a <*> f b
-  traverse _ (Zero n) = pure $ Zero n
-  
-test :: IO ()
-test = runInferT $ mdo
-  a <- newType $ Two 5 a b
-  b <- newType $ Zero 3
-  c <- newType $ Two 5 e e
-  d <- newType $ Two 2 c e
-  e <- newType $ Zero 3
-  g <- subGraph c
-  lift $ putStrLn $ squishGraph g
   
