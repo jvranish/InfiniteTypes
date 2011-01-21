@@ -1,10 +1,17 @@
-{-# LANGUAGE GeneralizedNewtypeDeriving, RankNTypes #-}
+{-# LANGUAGE GeneralizedNewtypeDeriving
+           , RankNTypes
+           , DeriveFunctor
+           , DeriveFoldable
+           , DeriveTraversable  
+           #-}
+                    
 module ContextRefT where
 
 import qualified Data.IntMap as IntMap
-import Control.Monad.State hiding (mapM_)
+import Control.Monad.State hiding (mapM_, mapM, forM)
 
 import Data.Foldable
+import Data.Traversable 
 import Data.Maybe
 
 import Misc
@@ -12,32 +19,34 @@ import Misc
 import Prelude hiding (elem, and, concat, mapM, mapM_)
 
 newtype ContextRef s = ContextRef { unRef :: Int }
+ -- ###TODO these neeed to go
     deriving (Eq, Ord)
 
 
-data ContextData s a = ContextData Int (IntMap.IntMap Int) (IntMap.IntMap (a, [Int]))
+data ContextData s t = ContextData Int (IntMap.IntMap Int) (IntMap.IntMap (t, [Int]))
+  deriving (Functor, Foldable, Traversable)
 
-newtype ContextT s m t a = ContextT { unContextT :: StateT (ContextData s t) m a}
+newtype ContextT s t m a = ContextT { unContextT :: StateT (ContextData s t) m a}
  deriving (Monad, MonadFix)
 
 
  
-runContextT :: (Monad m) => (forall s. ContextT s m t a) -> m a
+runContextT :: (Monad m) => (forall s. ContextT s t m a) -> m a
 runContextT m = evalStateT (unContextT m) (ContextData 0 IntMap.empty IntMap.empty)
 
-newRef :: (Monad m) => a -> ContextT s m a (ContextRef s)
+newRef :: (Monad m) => t -> ContextT s t m (ContextRef s)
 newRef a = ContextT $ do
   ContextData n x y <- get
   put $ ContextData (n + 1) (IntMap.insert n n x) (IntMap.insert n (a, [n]) y)
   return $ ContextRef n
   
 
-readRef :: (Monad m) => ContextRef s -> ContextT s m a a
+readRef :: (Monad m) => ContextRef s -> ContextT s t m t
 readRef (ContextRef ref) = ContextT $ do
   ContextData _ x y <- get
   let value = do
-      valueIdx <- IntMap.lookup ref x 
-      liftM fst $ IntMap.lookup valueIdx y 
+      valueIdx <- IntMap.lookup ref x
+      liftM fst $ IntMap.lookup valueIdx y
   return $ case value of
       Just a -> a
       Nothing -> error "You tried to read a reference that hasn't been defined yet. \
@@ -45,7 +54,7 @@ readRef (ContextRef ref) = ContextT $ do
                        \have gotten an infinite loop. Rather than run around in \
                        \circles I'm going to politely die instead."
            
-writeRef :: (Monad m) => ContextRef s -> a -> ContextT s m a ()
+writeRef :: (Monad m) => ContextRef s -> t -> ContextT s t m ()
 writeRef (ContextRef ref) a = ContextT $ do
   ContextData n x y <- get
   let maybeNewY = do
@@ -61,7 +70,7 @@ writeRef (ContextRef ref) a = ContextT $ do
   
   
 -- substitute a with b
-subsRef :: (Monad m) => ContextRef s -> ContextRef s -> ContextT s m a ()
+subsRef :: (Monad m) => ContextRef s -> ContextRef s -> ContextT s t m ()
 subsRef (ContextRef a) (ContextRef b) | a == b = return ()
 subsRef (ContextRef a) (ContextRef b) = ContextT $ do
   ContextData n x y <- get
@@ -84,10 +93,10 @@ subsRef (ContextRef a) (ContextRef b) = ContextT $ do
                        \have gotten an infinite loop. Rather than run around in \
                        \circles I'm going to politely die instead."
                        
-subsRefs :: (Monad m) => [ContextRef s] -> ContextRef s -> ContextT s m a ()
+subsRefs :: (Monad m) => [ContextRef s] -> ContextRef s -> ContextT s t m ()
 subsRefs xs a = mapM_ (flip subsRef a) xs
   
-refEq :: (Monad m) => ContextRef s -> ContextRef s -> ContextT s m a Bool
+refEq :: (Monad m) => ContextRef s -> ContextRef s -> ContextT s t m Bool
 refEq (ContextRef a) (ContextRef b) | a == b = return True
 refEq (ContextRef a) (ContextRef b) = ContextT $ do
   ContextData _ x _ <- get
@@ -103,18 +112,59 @@ refEq (ContextRef a) (ContextRef b) = ContextT $ do
                        \circles I'm going to politely die instead."
 -- This funciton is not perfect.  You could potentially pass in a reference that was created _after_ the context was forked.
 -- Normally this would just cause an error, but it could potentially 'work' but not do what you want.
--- This would be a nice thing to try in my experimental type system
-forkContext :: (MonadFix m) => (forall s'. (ContextRef s -> ContextRef s') -> ContextT s' m a b) -> ContextT s m a b
+-- It would be nice to have a way to enforce this in the type system somehow
+--forkContext :: (MonadFix m) => (forall s'. (ContextRef s -> ContextRef s') -> ContextT s' t m b) -> ContextT s t m b
 forkContext f = ContextT $ do
-  context@(ContextData n x y) <- get
-  a <- lift $ evalStateT (unContextT $ f caster) context
-  put $ (ContextData (n + 1) x y)
-  return a
+  context <- get
+  lift $ evalStateT (unContextT $ f caster) context
   where
     caster (ContextRef ref) = ContextRef ref
-  
 
-copySubGraph :: (MonadFix m, Foldable f, Functor f) => ContextRef s -> ContextT s m (f (ContextRef s)) (ContextRef s)
+-- #TODO fix this, the polymorphic type escapes because of the (t -> t'), I'm not sure it's possible to fix it :(
+--forkMappedContext :: (MonadFix m) => (t -> t') -> (forall s'. (ContextRef s -> ContextRef s') -> ContextT s' t' m b) -> ContextT s t m b
+forkMappedContext f g = ContextT $ do
+  context <- get
+  lift $ evalStateT (unContextT $ g caster) (fmap f context)
+  where
+    caster (ContextRef ref) = ContextRef ref
+    
+--mapContext :: (a -> b) -> ContextT s m b c -> ContextT s m a c  
+--mapContext :: (Monad m) => (a -> a) -> StateT (ContextData s a) m b -> ContextT s m a b
+--mapContext :: (Monad m) => (a -> b) -> ContextT s m a c -> ContextT s m b c
+--mapContext f (ContextT (StateT g)) = ContextT $ StateT 
+--g
+{-
+mergeIntMap :: (Ord k, Ord a) => IntMap.IntMap k a -> IntMap.IntMap a b -> IntMap.IntMap k b
+mergeIntMap a b = IntMap.fromList $ catMaybes $ fmap lookupValue $ IntMap.keys a
+  where
+    lookupValue k = IntMap.lookup k a >>= flip IntMap.lookup b >>= return . ((,) k)
+
+
+--exportContext ::
+exportContext = ContextT $ do
+    ContextData _ x y <- get
+    return $ findEssentials $ mergeIntMap x y
+  where
+    findEssentials t = IntMap.fromList $ Map.elems $ Map.fromList $ fmap (\(k, (a, xs)) -> (xs, (k, a))) $ IntMap.assocs t
+  -}
+--import
+--validateKey
+-- runStateT 
+-- ContextData n x y <- get
+
+--runContextT' :: (Monad m) => (forall s. (ContextT s t m a, ContextT s t' m a)) -> (t -> t') -> m a
+--runContextT' (m, n) = (a, s) runStateT (unContextT m) (ContextData 0 IntMap.empty IntMap.empty)
+
+
+
+--remember to swap m and t
+  
+--mapStateT (>>= return . mapSnd (\(ContextData n x y) -> ContextData n x $ IntMap.map (mapFst f) y)) m
+
+  --context@(ContextData n x y) <- get
+  --IntMap.map (mapFst f) y
+
+copySubGraph :: (MonadFix m, Foldable f, Functor f) => ContextRef s -> ContextT s (f (ContextRef s)) m (ContextRef s)
 copySubGraph ref = do
   relevantNodes <- reachable ref
   lookupNew <- mfix $ \lookupNew -> do
@@ -125,10 +175,11 @@ copySubGraph ref = do
     return lookupNew'
   return $ lookupNew ref
 
-
-reachable :: (Foldable f, Monad m) => ContextRef s -> ContextT s m (f (ContextRef s)) [ContextRef s]
+-- The return list always includes the original reference
+-- ###TODO!!!! fix bug here, we need to make this use refEq!!!
+reachable :: (Foldable f, Monad m) => ContextRef s -> ContextT s (f (ContextRef s)) m [ContextRef s]
 reachable ref = reachable' [] ref
-reachable' :: (Monad m, Foldable f) => [ContextRef s] -> ContextRef s -> ContextT s m (f (ContextRef s)) [ContextRef s]
+reachable' :: (Monad m, Foldable f) => [ContextRef s] -> ContextRef s -> ContextT s (f (ContextRef s)) m [ContextRef s]
 reachable' xs ref | ref `elem` xs = return []
 reachable' xs ref=  do
   x <- readRef ref
@@ -136,7 +187,7 @@ reachable' xs ref=  do
   return (ref:xs')
 
 graphEq :: (Functor f, Eq (f ()), Foldable f, MonadFix m) 
-        => ContextRef s -> ContextRef s -> ContextT s m (f (ContextRef s)) Bool
+        => ContextRef s -> ContextRef s -> ContextT s (f (ContextRef s)) m Bool
 graphEq aRef' bRef' = forkContext $ \cast -> let 
     graphEq' a b = graphEq'' (cast a) (cast b)
     graphEq'' aRef bRef = do

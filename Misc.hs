@@ -1,18 +1,19 @@
 {-# LANGUAGE FlexibleContexts #-}
 module Misc where
 
-import Control.Monad hiding (sequence)
-import Control.Monad.State hiding (sequence)
-import Control.Monad.Reader hiding (sequence)
-import Control.Monad.Writer hiding (sequence)
+import Control.Monad hiding (sequence, mapM)
+import Control.Monad.State hiding (sequence, mapM)
+import Control.Monad.Reader hiding (sequence, mapM)
+import Control.Monad.Writer hiding (sequence, mapM)
 
 import Data.Foldable -- hiding (elem, concat)
 import Data.Traversable 
- 
+
+import Data.Maybe
 
 import qualified Data.Map as Map
 
-import Prelude hiding (sequence, foldr)
+import Prelude hiding (sequence, foldr, concat, mapM)
 
 (...) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
 f ... g = \a b -> f (g a b)
@@ -28,6 +29,11 @@ unionWithM m aMap bMap = unionWithKeyM (const m) aMap bMap
 
 unionWithKeyM :: (Monad m, Ord k) => (k -> a -> a -> m a) -> Map.Map k a -> Map.Map k a -> m (Map.Map k a)
 unionWithKeyM m aMap bMap  = sequence $ Map.unionWithKey (\k -> bindM2 (m k)) (fmap return aMap) (fmap return bMap)
+
+mergeMap :: (Ord k, Ord a) => Map.Map k a -> Map.Map a b -> Map.Map k b
+mergeMap a b = Map.fromList $ catMaybes $ fmap lookupValue $ Map.keys a
+  where
+    lookupValue k = Map.lookup k a >>= flip Map.lookup b >>= return . ((,) k)
 
 deletes :: (Ord a) => [a] -> Map.Map a b -> Map.Map a b
 deletes keys t = foldr Map.delete t keys
@@ -88,7 +94,27 @@ makeSupply inits tails = let vars = inits ++ (liftM2 (++) vars tails) in vars
 varNames :: [String]
 varNames = makeSupply (words "a b c d e f g h i j k") (words "1 2 3 4 5")
 
+genSym :: (Monad m) => StateT [a] m a
+genSym = do
+  x:xs <- getT
+  putT xs
+  return x
+
 both :: (Monad m) => (a -> m b) -> a -> m (b, a)
 both m a = do
   b <- m a
   return (b, a)
+  
+mapFst :: (a -> b) -> (a, c) -> (b, c)
+mapFst f (a, b) = (f a, b)
+
+mapSnd :: (b -> c) -> (a, b) -> (a, c)
+mapSnd f (a, b) = (a, f b)
+
+swap :: (a, b) -> (b, a)
+swap (a, b) = (b, a)
+
+concatMapM :: (Traversable t, Monad m) => (a -> m [b]) -> t a -> m [b]
+concatMapM f t = liftM concat $ mapM f t
+
+
