@@ -2,7 +2,8 @@
            , RankNTypes
            , DeriveFunctor
            , DeriveFoldable
-           , DeriveTraversable  
+           , DeriveTraversable
+           , GADTs  
            #-}
                     
 module ContextRefT where
@@ -18,9 +19,8 @@ import Misc
 
 import Prelude hiding (elem, and, concat, mapM, mapM_)
 
+ -- this has no Eq, or Ord because they would basically never do what you expect
 newtype ContextRef s = ContextRef { unRef :: Int }
- -- ###TODO these neeed to go
-    deriving (Eq, Ord)
 
 
 data ContextData s t = ContextData Int (IntMap.IntMap Int) (IntMap.IntMap (t, [Int]))
@@ -29,9 +29,9 @@ data ContextData s t = ContextData Int (IntMap.IntMap Int) (IntMap.IntMap (t, [I
 newtype ContextT s t m a = ContextT { unContextT :: StateT (ContextData s t) m a}
  deriving (Monad, MonadFix)
 
-
- 
-runContextT :: (Monad m) => (forall s. ContextT s t m a) -> m a
+  
+-- #TODO, this is broken, we need to remove t from ContextT and move it to the references 
+--runContextT :: (Monad m) => (forall s. ContextT s t m a) -> m a
 runContextT m = evalStateT (unContextT m) (ContextData 0 IntMap.empty IntMap.empty)
 
 newRef :: (Monad m) => t -> ContextT s t m (ContextRef s)
@@ -110,6 +110,9 @@ refEq (ContextRef a) (ContextRef b) = ContextT $ do
                        \If you would've tried this in the IO or ST monad you would \
                        \have gotten an infinite loop. Rather than run around in \
                        \circles I'm going to politely die instead."
+                       
+-- #TODO hmmm I'm going to have to redesign ContextT to make this safe :/  I'll do that later
+
 -- This funciton is not perfect.  You could potentially pass in a reference that was created _after_ the context was forked.
 -- Normally this would just cause an error, but it could potentially 'work' but not do what you want.
 -- It would be nice to have a way to enforce this in the type system somehow
@@ -120,71 +123,56 @@ forkContext f = ContextT $ do
   where
     caster (ContextRef ref) = ContextRef ref
 
--- #TODO fix this, the polymorphic type escapes because of the (t -> t'), I'm not sure it's possible to fix it :(
+ 
 --forkMappedContext :: (MonadFix m) => (t -> t') -> (forall s'. (ContextRef s -> ContextRef s') -> ContextT s' t' m b) -> ContextT s t m b
 forkMappedContext f g = ContextT $ do
   context <- get
   lift $ evalStateT (unContextT $ g caster) (fmap f context)
   where
     caster (ContextRef ref) = ContextRef ref
-    
---mapContext :: (a -> b) -> ContextT s m b c -> ContextT s m a c  
---mapContext :: (Monad m) => (a -> a) -> StateT (ContextData s a) m b -> ContextT s m a b
---mapContext :: (Monad m) => (a -> b) -> ContextT s m a c -> ContextT s m b c
---mapContext f (ContextT (StateT g)) = ContextT $ StateT 
---g
-{-
-mergeIntMap :: (Ord k, Ord a) => IntMap.IntMap k a -> IntMap.IntMap a b -> IntMap.IntMap k b
-mergeIntMap a b = IntMap.fromList $ catMaybes $ fmap lookupValue $ IntMap.keys a
-  where
-    lookupValue k = IntMap.lookup k a >>= flip IntMap.lookup b >>= return . ((,) k)
 
-
---exportContext ::
-exportContext = ContextT $ do
-    ContextData _ x y <- get
-    return $ findEssentials $ mergeIntMap x y
-  where
-    findEssentials t = IntMap.fromList $ Map.elems $ Map.fromList $ fmap (\(k, (a, xs)) -> (xs, (k, a))) $ IntMap.assocs t
-  -}
---import
---validateKey
--- runStateT 
--- ContextData n x y <- get
-
---runContextT' :: (Monad m) => (forall s. (ContextT s t m a, ContextT s t' m a)) -> (t -> t') -> m a
---runContextT' (m, n) = (a, s) runStateT (unContextT m) (ContextData 0 IntMap.empty IntMap.empty)
-
-
-
---remember to swap m and t
-  
---mapStateT (>>= return . mapSnd (\(ContextData n x y) -> ContextData n x $ IntMap.map (mapFst f) y)) m
-
-  --context@(ContextData n x y) <- get
-  --IntMap.map (mapFst f) y
-
-copySubGraph :: (MonadFix m, Foldable f, Functor f) => ContextRef s -> ContextT s (f (ContextRef s)) m (ContextRef s)
+copySubGraph :: (MonadFix m, Traversable f, Functor f) => ContextRef s -> ContextT s (f (ContextRef s)) m (ContextRef s)
 copySubGraph ref = do
   relevantNodes <- reachable ref
   lookupNew <- mfix $ \lookupNew -> do
     newNodes <- forM relevantNodes $ \x -> do
       newValue <- readRef x
-      newRef $ fmap lookupNew newValue
-    let lookupNew' a = fromJust $ lookup a $ zip relevantNodes newNodes
+      newRef =<< mapM lookupNew newValue
+    let lookupNew' a = liftM fromJust $ lookupRef a $ zip relevantNodes newNodes
     return lookupNew'
-  return $ lookupNew ref
+  lookupNew ref
+  
+lookupRef :: (Monad m) => ContextRef s -> [(ContextRef s, a)] -> ContextT s t m (Maybe a)
+lookupRef ref []          = return Nothing
+lookupRef ref ((x,y):xys) = do
+  yep <- refEq ref x
+  case yep of
+    True  -> return $ Just y
+    False -> lookupRef ref xys
 
--- The return list always includes the original reference
--- ###TODO!!!! fix bug here, we need to make this use refEq!!!
+-- The returned list always includes the original reference
 reachable :: (Foldable f, Monad m) => ContextRef s -> ContextT s (f (ContextRef s)) m [ContextRef s]
 reachable ref = reachable' [] ref
 reachable' :: (Monad m, Foldable f) => [ContextRef s] -> ContextRef s -> ContextT s (f (ContextRef s)) m [ContextRef s]
-reachable' xs ref | ref `elem` xs = return []
-reachable' xs ref=  do
-  x <- readRef ref
-  xs' <- liftM concat $ mapM (reachable' (ref:xs)) $ toList x
-  return (ref:xs')
+reachable' xs ref= do
+  alreadyFound <- refElem ref xs
+  case alreadyFound of
+    True -> return []
+    False -> do
+      x <- readRef ref
+      xs' <- liftM concat $ mapM (reachable' (ref:xs)) $ toList x
+      return (ref:xs')
+
+refElem :: (Monad m, Foldable f) => ContextRef s -> f (ContextRef s) -> ContextT s t m Bool
+refElem ref t = refElem' $ toList t
+  where
+    refElem' []     = return False
+    refElem' (x:xs) = do
+      yep <- refEq ref x
+      case yep of
+        True  -> return True
+        False -> refElem' xs
+    
 
 graphEq :: (Functor f, Eq (f ()), Foldable f, MonadFix m) 
         => ContextRef s -> ContextRef s -> ContextT s (f (ContextRef s)) m Bool

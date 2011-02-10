@@ -29,6 +29,10 @@ import Control.Monad hiding (mapM)
 import Control.Monad.State hiding (mapM)
 import Control.Monad.Reader hiding (mapM)
 
+-- #TODO probably eventually remove this
+import Control.Monad.Identity hiding (mapM)
+import Data.IORef
+
 import Fix
 import Misc
 import ContextRefT
@@ -42,14 +46,6 @@ data Type a = Var
             | Func a a
   deriving (Eq, Ord, Show, Functor, Foldable, Traversable)
   
--- #TODO use pprint instead, cause show is silly
-{-
-instance (Show a) => Show (Mythingy Type a) where
-  show (Var) = "@"
-  show (Func a@(Func _ _) b) = "(" ++ show a ++ ")" ++ " -> " ++ show b
-  show (Func a b) = show a ++ " -> " ++ show b
--}
-
 data Expr a = Apply a a
             | Id String
             | Lambda String a
@@ -96,23 +92,17 @@ infer (Y e) = infer' e
       return f
 
 {-
+#TODO
 print out type,
 parse type from signature
 -}
 
---data Thing a = Thing a (Map String a)
---convert all items to Right items
-{-
-  check if reachable
--}
---Either String (f a)
-
 -- 
 -- Check to see if a is reachable from b. Will return false if a == b unless there is a cycle
--- # TODO remove elem !!!!FIX THIS!!! and remove the EQ instance
 reachableFrom :: (Foldable f, Monad m) => ContextRef s -> ContextRef s -> ContextT s (f (ContextRef s)) m Bool
-reachableFrom a b = liftM (elem a) $ concatMapM reachable =<< return . toList =<< readRef b
+reachableFrom a b = refElem a =<< concatMapM reachable =<< return . toList =<< readRef b
 
+-- #TODO find a better name for this thingy
 data Mythingy f a = Mythingy (Either String (f a))
   deriving (Eq, Ord, Functor, Foldable, Traversable)
   
@@ -120,10 +110,10 @@ instance (Show (f a)) => Show (Mythingy f a) where
   show (Mythingy (Left s)) = s
   show (Mythingy (Right a)) = show a
   
-deriving instance Foldable (Either e) -- neatest feature EVAR!
+deriving instance Foldable (Either e) -- neatest feature ever.
 deriving instance Traversable (Either e)
 
-
+showType :: (Monad m) => ContextRef s -> ContextT s (Type (ContextRef s)) m String
 showType ref = do
   (a, t) <- flattenType ref
   return $ List.intercalate ", " $ fmap showVarDef $ Map.assocs t
@@ -152,15 +142,47 @@ flatten ref = do
           modifyT $ Map.insert newSym $ Y flatA
           return $ Y x
         False -> liftM Y $ mapM flatten a
-      {-
-  case a of
-    Mythingy (Right x) -> 
-    Mythingy (Left x) -> return $ Mythingy $ Left x -}
   
--- #TODO make a check against signature function
-
+-- sig should not be reachable from 'a' and viceversa (because that would be silly)
+checkAgainstSig :: (MonadFix m) => ContextRef t -> ContextRef t -> ContextT t (Type (ContextRef t)) m Bool
 checkAgainstSig sig a = forkContext $ \cast -> do
   sig' <- copySubGraph $ cast sig
   ab <- unify sig' (cast a)
   graphEq sig ab
+  
+y = fixify $ Lambda "f" (Apply (Lambda "x" (Apply (Id "f") (Apply (Id "x") (Id "x")))) (Lambda "x" (Apply (Id "f") (Apply (Id "x") (Id "x")))))
+
+--(Lambda "x" (Apply (Id "f") (Apply (Id "x") (Id "x"))))
+--b = Lambda "x" (Lambda "y" (Lambda "z" (Apply (Id "x") (Apply (Id "y") (Id "z"))))
+--c
+--i
+--k
+{-
+Expr> y (b (c i) (c (b b (b c (c i)))))
+(fix b . (a -> b -> (a -> c -> d) -> d) -> c) -> c)
+Expr> y (b (c i) (b (c (b b (b c (c i)))) (b (c i) k)))
+(fix c . ((a -> ((b -> c) -> d) -> (a -> d -> e) -> e) -> f) -> f)
+-}
+
+--B = (a -> B -> (a -> c -> d) -> d) -> c) -> c
+--C = ((a -> ((b -> C) -> d) -> (a -> d -> e) -> e) -> f) -> f
+--Y = λf.(λx.f (x x)) (λx.f (x x))
+test = runIdentity $ runContextT $ do
+  yType <- runReaderT (infer y) []
+  showType yType
+  --return "Asdf"
+  
+{-
+The magic features will be:
+substitute, that does not look into values (and causes reference substitute)
+newRef must not affect the state, (substituting a newref that is created after the substitute needs to work)
+we could perhaps hold the value in the reference until an update happens
+
+-}
+  
+testIO = do
+  rec
+    a <- newIORef (Y b)
+    b <- newIORef (Y a)
+  return a
   

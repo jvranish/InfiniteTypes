@@ -25,3 +25,7 @@ transformFixM f (Y x) = f =<< mapM (transformFixM f) x
 
 transformFix :: (Functor f) => (f b -> b) -> Y f -> b
 transformFix f (Y x) = f $ fmap (transformFix f) x
+
+fixify :: (Functor f) => f (f (f (f (f (f (f (f (f (f (f (Y f))))))))))) -> Y f
+fixify t = Y $ fmap (Y . fmap (Y . fmap (Y . fmap (Y . fmap (Y . fmap (Y . fmap (Y . fmap (Y . fmap (Y . fmap Y))))))))) t
+
