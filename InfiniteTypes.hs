@@ -35,11 +35,11 @@ import Data.IORef
 
 import Fix
 import Misc
-import ContextRefT
+import GraphT
 
 import Prelude hiding (elem, mapM)
 
-type TypeRef s = ContextRef s
+type TypeRef s = GraphRef s Type
 
 
 data Type a = Var
@@ -51,7 +51,7 @@ data Expr a = Apply a a
             | Lambda String a
   deriving (Eq, Ord, Show, Functor, Foldable, Traversable)
   
-unify :: (MonadFix m) => TypeRef s -> TypeRef s -> ContextT s (Type (TypeRef s)) m (TypeRef s)
+unify :: (MonadFix m) => TypeRef s -> TypeRef s -> GraphT s Type m (TypeRef s)
 unify aRef bRef = do
     sameRef <- refEq aRef bRef
     case sameRef of
@@ -59,14 +59,20 @@ unify aRef bRef = do
       False -> do
           a <- readRef aRef
           b <- readRef bRef
-          rec 
+          rec
             subsRefs [aRef, bRef] n  -- the awesome happens here
             n <- unify' a b  
           return n
   where
     unify' Var _ = return bRef
     unify' _ Var = return aRef
-    unify' (Func a b) (Func c d) = newRef =<< return Func `ap` unify a c `ap` unify b d
+    unify' (Func a b) (Func c d) = do
+      rec
+        r <- newRef $ Func a' b'
+        a' <- unify a c
+        b' <- unify b d
+      return r
+    -- newRef =<< return Func `ap` unify a c `ap` unify b d
 {-
 It would be cooler and more flexible to convert the expr to a graph and then tie all the name bindings
   in the graph, and then run a SCC to determine the order to unify.
@@ -74,7 +80,7 @@ It would be cooler and more flexible to convert the expr to a graph and then tie
   
 -}
   
-infer :: (MonadFix m) => Y Expr -> ReaderT [(String, TypeRef s)] (ContextT s (Type (TypeRef s)) m) (TypeRef s)
+infer :: (MonadFix m) => Y Expr -> ReaderT [(String, TypeRef s)] (GraphT s Type m) (TypeRef s)
 infer (Y e) = infer' e
   where
     infer' (Apply a b) = do
@@ -97,10 +103,7 @@ print out type,
 parse type from signature
 -}
 
--- 
--- Check to see if a is reachable from b. Will return false if a == b unless there is a cycle
-reachableFrom :: (Foldable f, Monad m) => ContextRef s -> ContextRef s -> ContextT s (f (ContextRef s)) m Bool
-reachableFrom a b = refElem a =<< concatMapM reachable =<< return . toList =<< readRef b
+
 
 -- #TODO find a better name for this thingy
 data Mythingy f a = Mythingy (Either String (f a))
@@ -113,7 +116,7 @@ instance (Show (f a)) => Show (Mythingy f a) where
 deriving instance Foldable (Either e) -- neatest feature ever.
 deriving instance Traversable (Either e)
 
-showType :: (Monad m) => ContextRef s -> ContextT s (Type (ContextRef s)) m String
+showType :: (Monad m) => TypeRef s -> GraphT s Type m String
 showType ref = do
   (a, t) <- flattenType ref
   return $ List.intercalate ", " $ fmap showVarDef $ Map.assocs t
@@ -122,8 +125,8 @@ showVarDef (s, a) = s ++ " = " ++ show a
 
 
 --flattenType :: (Monad m, Traversable f) => ContextRef t -> ContextT s (f (ContextRef s)) m (Y (Mythingy f), Map.Map String (Y (Mythingy f)))
-flattenType ref = forkMappedContext (Mythingy . Right) $ \cast ->
-    evalStateT (runStateT (flatten (cast ref)) Map.empty) varNames
+flattenType ref = forkMappedContext [ref] (Mythingy . Right) $ \[ref'] ->
+    evalStateT (runStateT (flatten ref') Map.empty) varNames
     
 --flatten :: (Monad m, Traversable f) => ContextRef s -> StateT (Map.Map String (Y (Mythingy f))) (StateT [String] (ContextT s (Mythingy f (ContextRef s)) m)) (Y (Mythingy f))
 flatten ref = do
@@ -144,14 +147,14 @@ flatten ref = do
         False -> liftM Y $ mapM flatten a
   
 -- sig should not be reachable from 'a' and viceversa (because that would be silly)
-checkAgainstSig :: (MonadFix m) => ContextRef t -> ContextRef t -> ContextT t (Type (ContextRef t)) m Bool
-checkAgainstSig sig a = forkContext $ \cast -> do
-  sig' <- copySubGraph $ cast sig
-  ab <- unify sig' (cast a)
-  graphEq sig ab
+checkAgainstSig :: (MonadFix m) => TypeRef s -> TypeRef s -> GraphT s Type m Bool
+checkAgainstSig sig a = forkContext [sig, a] $ \[sig', a'] -> do
+  sig'' <- copySubGraph $ sig'
+  ab <- unify sig'' a'
+  graphEq sig' ab
   
 y = fixify $ Lambda "f" (Apply (Lambda "x" (Apply (Id "f") (Apply (Id "x") (Id "x")))) (Lambda "x" (Apply (Id "f") (Apply (Id "x") (Id "x")))))
-
+--y = fixify $ Lambda "x"  (Apply (Id "x") (Id "x"))
 --(Lambda "x" (Apply (Id "f") (Apply (Id "x") (Id "x"))))
 --b = Lambda "x" (Lambda "y" (Lambda "z" (Apply (Id "x") (Apply (Id "y") (Id "z"))))
 --c
@@ -167,10 +170,26 @@ Expr> y (b (c i) (b (c (b b (b c (c i)))) (b (c i) k)))
 --B = (a -> B -> (a -> c -> d) -> d) -> c) -> c
 --C = ((a -> ((b -> C) -> d) -> (a -> d -> e) -> e) -> f) -> f
 --Y = λf.(λx.f (x x)) (λx.f (x x))
-test = runIdentity $ runContextT $ do
+test = runIdentity $ runGraphT $ do
   yType <- runReaderT (infer y) []
   showType yType
   --return "Asdf"
+  
+
+--test :: MonadFix m => ContextT s (Y (ContextRef s)) m String
+-- test2 :: MonadFix m => GraphT s Maybe m String
+test2 = runIdentity $ runGraphT $  do
+  rec
+    a <- newRef $ Just b
+    writeRef a $  Just b
+    b <- newRef $ Just a
+  forkContext [b] $ \[x] -> do
+    v <- readRef x
+    r <- newRef $ Just x
+    return "asdf"
+    --return x
+  --b <- newRef $ Just a
+  
   
 {-
 The magic features will be:
