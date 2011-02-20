@@ -4,7 +4,6 @@
  
 module GraphT where
 
--- #TODO perhaps add non transformer runContext
 import Data.Maybe
 import Data.Foldable
 import Data.Traversable

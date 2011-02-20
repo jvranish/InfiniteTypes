@@ -18,6 +18,18 @@ import Prelude hiding (sequence, foldr, concat, mapM)
 (...) :: (c -> d) -> (a -> b -> c) -> a -> b -> d
 f ... g = \a b -> f (g a b)
 
+infix 1 ?, ??
+
+(?) :: Bool -> a -> a -> a
+(c ? t) e = if c then t else e
+
+(??) :: (Monad m) => m Bool -> m a -> m a -> m a
+(c ?? t) e = do
+  v <- c
+  if v then t else e
+  
+--liftM3 (?)
+
 bindM2 :: (Monad m) => (a -> b -> m c) -> m a -> m b -> m c
 bindM2 f a b = join $ liftM2 f a b --return f `ap` a `ap` b
 

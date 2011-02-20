@@ -29,7 +29,7 @@ data ContextData t = ContextData Int (IntMap.IntMap Int) (IntMap.IntMap (t, [Int
 
 -- safe to construct, unsafe to deconstruct
 newtype ContextT s t m a = UnsafeContextT { unsafeUnContextT :: StateT (ContextData t) m a}
- deriving (Monad, MonadFix, MonadTrans, Applicative, Alternative, Functor, MonadPlus, MonadCont, MonadIO) -- #TODO derive other classes too
+ deriving (Monad, MonadFix, MonadTrans, Applicative, Alternative, Functor, MonadPlus, MonadCont, MonadIO)
   
 runContextT :: (Monad m) => (forall s. ContextT s t m a) -> m a
 runContextT m = unsafeRunContextT m
