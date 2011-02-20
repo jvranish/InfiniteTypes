@@ -1,0 +1,10 @@
+Version of workspace file format:
+               1
+Time of storage:
+               "Sun Feb 20 16:59:08 Eastern Standard Time 2011"
+Name of the workspace:
+               "InfiniteTypes"
+File paths of contained packages:
+               ["InfiniteTypes.cabal"]
+Maybe file path of an active package:
+               Just "InfiniteTypes.cabal"
