@@ -14,7 +14,7 @@ import InfiniteTypes
 
 subsEnv :: Y Expr -> Y Expr
 subsEnv a = runReader (transformFixM subsId a) env
-  
+
 i, k, c, b, s, y :: Y Expr
 i = parseE "\\x -> x"                                      -- ?x.x
 k = parseE "\\x -> \\y -> x"                               -- ?x.?y.x
@@ -53,7 +53,7 @@ testB = subsEnv $ parseE "(y (b (c i) (b (c (b b (b c (c i)))) (b (c i) k))))"
 --C : C = ((a -> ((b -> C) -> d) -> (a -> d -> e) -> e) -> f) -> f
 showInferType :: Y Expr -> String
 showInferType x = runIdentity $ runGraphT $ showType =<< runReaderT (infer x) []
-  
+
 test :: (Bool, Bool)
 test = runIdentity $ runGraphT $ do
   aType <- runReaderT (infer testA) []
@@ -61,10 +61,15 @@ test = runIdentity $ runGraphT $ do
   ab <- checkAgainstSig aType bType
   ba <- checkAgainstSig bType aType
   return (ab, ba)
-  
+
 main :: IO ()
 main = do
   putStrLn $ showInferType testA
   putStrLn $ showInferType testB
+  putStrLn $ runIdentity $ runGraphT $ do
+    aType <- runReaderT (infer testA) []
+    bType <- runReaderT (infer testB) []
+    unify aType bType
+    showType aType
   print test
-  
+

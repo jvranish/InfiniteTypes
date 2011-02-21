@@ -6,9 +6,9 @@
            , FlexibleContexts
            , RankNTypes
            #-}
-           
+
 module InfiniteTypes where
-           
+
 import Data.Char
 import Data.Maybe
 import Data.Foldable
@@ -44,12 +44,12 @@ type TypeRef s = GraphRef s Type
 data Type a = Var
             | Func a a
   deriving (Eq, Ord, Show, Functor, Foldable, Traversable)
-  
+
 data Expr a = Apply a a
             | Id String
             | Lambda String a
   deriving (Eq, Ord, Show, Functor, Foldable, Traversable)
-  
+
 -- I'm not very confident of how the precedence stuff is setup here.
 instance (Pretty a) => Pretty (Type a) where
   pPrintPrec _ _ Var = text "Var"
@@ -59,19 +59,19 @@ instance (Pretty a) => Pretty (Expr a) where
   pPrintPrec _ _ (Id name) = text name
   pPrintPrec l p (Lambda name a) = wrapParen p 0 $ char '\\' <> text name <+> text "->" <+> pPrintPrec l 0 a
   pPrintPrec l p (Apply a b) = wrapParen p 1 $  pPrintPrec l 1 a <+> pPrintPrec l 2 b
-  
+
 wrapParen :: (Ord a) => a -> a -> Doc -> Doc
 wrapParen prio consPrio x | prio > consPrio = parens x
                           | otherwise       = x
 
 
 
-  
+
 unify :: (MonadFix m) => TypeRef s -> TypeRef s -> GraphT s Type m ()
 unify aRef bRef = refEq aRef bRef ?? (return ()) $ bindM2 unify' (readRef aRef) (readRef bRef)
   where
     unify' Var _ = subsRef aRef bRef
-    unify' _ Var = subsRef bRef aRef 
+    unify' _ Var = subsRef bRef aRef
     unify' (Func a b) (Func c d) = do
                 writeRef bRef $ Func a b
                 subsRef aRef bRef
@@ -81,9 +81,9 @@ unify aRef bRef = refEq aRef bRef ?? (return ()) $ bindM2 unify' (readRef aRef) 
 It would be cooler and more flexible to convert the expr to a graph and then tie all the name bindings
   in the graph, and then run a SCC to determine the order to unify.
   but this isn't really helpful until I put in let bindings, so I'm going to use the stupid simple way
-  
+
 -}
-  
+
 infer :: (MonadFix m) => Y Expr -> ReaderT [(String, TypeRef s)] (GraphT s Type m) (TypeRef s)
 infer (Y e) = case e of
   Apply a b -> do
@@ -103,11 +103,11 @@ infer (Y e) = case e of
 
 data EitherF f a = EitherF (Either String (f a))
   deriving (Eq, Ord, Show, Functor, Foldable, Traversable)
-  
+
 instance (Pretty (f a)) => Pretty (EitherF f a) where
   pPrintPrec _ _ (EitherF (Left s)) = text s
   pPrintPrec l p (EitherF (Right a)) = pPrintPrec l p a
-  
+
 deriving instance Foldable (Either e) -- neatest feature ever.
 deriving instance Traversable (Either e)
 
@@ -115,7 +115,7 @@ showType :: (Monad m) => TypeRef s -> GraphT s Type m String
 showType ref = do
   (a, t) <- flattenType ref
   return $ (prettyShow a)  ++ " : " ++ (List.intercalate ", " $ fmap showVarDef $ Map.assocs t)
-  
+
 showVarDef :: (Pretty a) => (String, a) -> String
 showVarDef (s, a) = s ++ " = " ++ prettyShow a
 
@@ -124,7 +124,7 @@ showVarDef (s, a) = s ++ " = " ++ prettyShow a
 flattenType :: (Monad m) => GraphRef s Type -> GraphT s Type m (Y (EitherF Type), Map.Map String (Y (EitherF Type)))
 flattenType ref = forkMappedContext (ref :. Nil) (EitherF . Right) $ \(ref' :. Nil) ->
     evalStateT (runStateT (flatten ref') Map.empty) varNames
-    
+
 
 flatten :: (Monad m) => GraphRef s (EitherF Type) -> StateT (Map.Map [Char] (Y (EitherF Type))) (StateT [String] (GraphT s (EitherF Type) m)) (Y (EitherF Type))
 flatten ref = do
@@ -132,7 +132,7 @@ flatten ref = do
     a <- lift $ lift $ readRef ref
     case a of
       EitherF (Right Var) -> liftM Y $ writeName ref =<< lift genSym
-      _ -> case hasCycle of 
+      _ -> case hasCycle of
           True -> do {- replace node with new symbol, add symbol to map, fill out that row in the map -}
             newSym <- liftM (fmap toUpper) $ lift genSym
             x <- writeName ref newSym
@@ -145,15 +145,15 @@ flatten ref = do
       let x = EitherF $ Left varName
       lift $ lift $ writeRef ref' x
       return x
-  
+
 -- sig should not be reachable from 'a' and viceversa (because that would be silly)
 checkAgainstSig :: (MonadFix m) => TypeRef s -> TypeRef s -> GraphT s Type m Bool
 checkAgainstSig sig a = forkContext (sig :. a :. Nil) $ \(sig' :. a' :. Nil) -> do
-  sig'' <- copySubGraph $ sig'
+  sig'' <- copySubGraph sig'
   unify sig'' a'
   graphEq sig' sig''
-  
-  
+
+
 lexer :: Token.GenTokenParser String u Identity
 lexer = Token.makeTokenParser haskellStyle
 identifier :: ParsecT String u Identity String
@@ -164,7 +164,7 @@ parseParens :: ParsecT String u Identity a -> ParsecT String u Identity a
 parseParens = Token.parens lexer
 
 parseExpr :: Parser (Y Expr)
-parseExpr = parseApply <|> parseLambda <|> parseId 
+parseExpr = parseApply <|> parseLambda <|> parseId
 
 parseApply :: Parser (Y Expr)
 parseApply = parseParens $ do
@@ -178,13 +178,13 @@ parseId = do
   return $ Y $ Id name
 
 parseLambda :: Parser (Y Expr)
-parseLambda = do 
+parseLambda = do
   _ <- symbol "\\"
   param <- identifier
   _ <- symbol "->"
   expr <- parseExpr
   return $ Y $ Lambda param expr
-  
+
 
 parseE :: String -> Y Expr
 parseE s = case parse parseExpr "" s of
